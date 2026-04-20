@@ -61,6 +61,7 @@ func main() {
 			mcp.WithDescription("Export a Zendesk ticket as a complete Markdown document with YAML frontmatter. Resolves author names, filters bot comments, downloads attachments as base64, and rewrites attachment URLs to relative paths (./attachments/filename). Returns the markdown string and attachment data."),
 			mcp.WithNumber("ticket_id", mcp.Required(), mcp.Description("The Zendesk ticket ID to export")),
 			mcp.WithBoolean("include_internal_notes", mcp.Description("Include internal/private comments in the export (default: true)")),
+			mcp.WithString("output_dir", mcp.Description("When set, attachments are written directly to {output_dir}/attachments/ on disk instead of being returned as base64 in the response. Keeps the response small for tickets with large attachments.")),
 		),
 		handleExportTicketMarkdown,
 	)
@@ -71,6 +72,7 @@ func main() {
 			mcp.WithNumber("ticket_id", mcp.Required(), mcp.Description("The Zendesk ticket ID")),
 			mcp.WithString("since", mcp.Required(), mcp.Description("ISO 8601 timestamp (e.g. 2024-01-15T10:30:00Z). Only comments created after this time are returned.")),
 			mcp.WithBoolean("include_internal_notes", mcp.Description("Include internal/private comments (default: true)")),
+			mcp.WithString("output_dir", mcp.Description("When set, attachments are written directly to {output_dir}/attachments/ on disk instead of being returned as base64 in the response.")),
 		),
 		handleGetTicketUpdates,
 	)
@@ -191,8 +193,9 @@ func handleListTickets(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 func handleExportTicketMarkdown(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ticketID := req.GetInt("ticket_id", 0)
 	includeInternal := getBool(req, "include_internal_notes", true)
+	outputDir := req.GetString("output_dir", "")
 
-	result, err := exportTicketMarkdown(ticketID, includeInternal)
+	result, err := exportTicketMarkdown(ticketID, includeInternal, outputDir)
 	if err != nil {
 		return errorResult("Error exporting ticket", err), nil
 	}
@@ -204,12 +207,13 @@ func handleGetTicketUpdates(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	ticketID := req.GetInt("ticket_id", 0)
 	since := req.GetString("since", "")
 	includeInternal := getBool(req, "include_internal_notes", true)
+	outputDir := req.GetString("output_dir", "")
 
 	if since == "" {
 		return errorResult("Missing required parameter", fmt.Errorf("'since' timestamp is required")), nil
 	}
 
-	result, err := getTicketUpdatesSince(ticketID, since, includeInternal)
+	result, err := getTicketUpdatesSince(ticketID, since, includeInternal, outputDir)
 	if err != nil {
 		return errorResult("Error getting ticket updates", err), nil
 	}

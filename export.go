@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -136,8 +137,12 @@ func renderComment(comment ZendeskComment, users map[int]ZendeskUser) string {
 	return sb.String()
 }
 
-// processAttachments downloads attachments from filtered comments and returns them as base64.
-func processAttachments(comments []ZendeskComment) []ExportAttachment {
+// processAttachments downloads attachments from filtered comments.
+// When outputDir is non-empty, attachments are written directly to
+// {outputDir}/attachments/ and the returned structs omit base64 data,
+// keeping the MCP response small. When outputDir is empty, the original
+// behavior is preserved (base64-encoded data in the response).
+func processAttachments(comments []ZendeskComment, outputDir string) []ExportAttachment {
 	var attachments []ExportAttachment
 	for _, c := range comments {
 		for _, a := range c.Attachments {
@@ -146,11 +151,29 @@ func processAttachments(comments []ZendeskComment) []ExportAttachment {
 				fmt.Fprintf(os.Stderr, "Warning: could not download attachment %s: %v\n", a.FileName, err)
 				continue
 			}
-			attachments = append(attachments, ExportAttachment{
-				Filename: sanitizeFilename(a.FileName),
-				Data:     base64.StdEncoding.EncodeToString(data),
-				Size:     len(data),
-			})
+			filename := sanitizeFilename(a.FileName)
+
+			if outputDir != "" {
+				dir := filepath.Join(outputDir, "attachments")
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not create attachments dir: %v\n", err)
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(dir, filename), data, 0644); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not write attachment %s: %v\n", filename, err)
+					continue
+				}
+				attachments = append(attachments, ExportAttachment{
+					Filename: filename,
+					Size:     len(data),
+				})
+			} else {
+				attachments = append(attachments, ExportAttachment{
+					Filename: filename,
+					Data:     base64.StdEncoding.EncodeToString(data),
+					Size:     len(data),
+				})
+			}
 		}
 	}
 	return attachments
@@ -172,7 +195,9 @@ func filterComments(comments []ZendeskComment, includeInternal bool) []ZendeskCo
 }
 
 // exportTicketMarkdown builds a full markdown export of a ticket with all comments.
-func exportTicketMarkdown(ticketID int, includeInternal bool) (map[string]any, error) {
+// When outputDir is non-empty, attachments are written to disk instead of
+// being returned as base64 in the response.
+func exportTicketMarkdown(ticketID int, includeInternal bool, outputDir string) (map[string]any, error) {
 	ticketRes, err := getTicket(ticketID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching ticket: %w", err)
@@ -206,7 +231,7 @@ func exportTicketMarkdown(ticketID int, includeInternal bool) (map[string]any, e
 	}
 
 	filtered := filterComments(comments, includeInternal)
-	attachments := processAttachments(filtered)
+	attachments := processAttachments(filtered, outputDir)
 
 	var md strings.Builder
 	md.WriteString(renderFrontmatter(ticket, users, orgName))
@@ -227,7 +252,9 @@ func exportTicketMarkdown(ticketID int, includeInternal bool) (map[string]any, e
 }
 
 // getTicketUpdatesSince returns only comments created after the given timestamp.
-func getTicketUpdatesSince(ticketID int, since string, includeInternal bool) (map[string]any, error) {
+// When outputDir is non-empty, attachments are written to disk instead of
+// being returned as base64 in the response.
+func getTicketUpdatesSince(ticketID int, since string, includeInternal bool, outputDir string) (map[string]any, error) {
 	sinceTime, err := time.Parse(time.RFC3339, since)
 	if err != nil {
 		return nil, fmt.Errorf("invalid 'since' timestamp (expected ISO 8601 / RFC 3339): %w", err)
@@ -268,7 +295,7 @@ func getTicketUpdatesSince(ticketID int, since string, includeInternal bool) (ma
 	}
 
 	filtered := filterComments(newComments, includeInternal)
-	attachments := processAttachments(filtered)
+	attachments := processAttachments(filtered, outputDir)
 
 	var md strings.Builder
 	for _, c := range filtered {
